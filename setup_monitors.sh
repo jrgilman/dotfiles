@@ -23,13 +23,13 @@ FOUND_EDID_VALUE=false
 EDID_VALUE=""
 
 while read -r LINE; do
-	if [[ "$FOUND_EDP" = false && ( $LINE =~ ^(eDP-[0-9])[[:space:]]connected || $LINE =~ ^(eDP[0-9])[[:space:]]connected ) ]]; then
+	if [[ "$FOUND_EDP" = false && ( $LINE =~ ^(eDP-[0-9])[[:space:]] || $LINE =~ ^(eDP[0-9])[[:space:]] ) ]]; then
 		EDP_VALUE=${BASH_REMATCH[1]}
 		echo $EDP_VALUE	
 		FOUND_EDP=true
 	fi
 
-	if [[ $LINE =~ ^(DP-[0-9]-[0-9])[[:space:]]connected ]] || [[ $LINE =~ ^(DP[0-9]-[0-9])[[:space:]]connected ]]; then
+	if [[ $LINE =~ ^(DP-[0-9]-[0-9])[[:space:]] ]] || [[ $LINE =~ ^(DP[0-9]-[0-9])[[:space:]] ]]; then
 		DP_VALUE=${BASH_REMATCH[1]}	
 		FOUND_DP=true
 	fi
