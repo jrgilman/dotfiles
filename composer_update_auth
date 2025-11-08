@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+# Script to update Composer's auth.json with GitHub token from gh CLI
+set -e
+
+if ! command -v gh &> /dev/null; then
+    echo "Error: GitHub CLI (gh) is not installed."
+    exit 1
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is not installed."
+    exit 1
+fi
+
+if ! command -v composer &> /dev/null; then
+    echo "Error: composer is not installed."
+    exit 1
+fi
+
+if ! gh auth status &> /dev/null; then
+    echo "Error: GitHub CLI is not authenticated."
+    exit 1
+fi
+
+GITHUB_TOKEN=$(gh auth token)
+if [ -z "$GITHUB_TOKEN" ]; then
+    echo "Error: Failed to retrieve GitHub token from gh CLI."
+    exit 1
+fi
+
+COMPOSER_DIR="$HOME/.config/composer"
+if [ ! -d "$COMPOSER_DIR" ]; then
+    echo "Creating directory: $COMPOSER_DIR"
+    mkdir -p "$COMPOSER_DIR"
+fi
+
+AUTH_JSON="$COMPOSER_DIR/auth.json"
+if [ -f "$AUTH_JSON" ]; then
+    BACKUP_FILE="${AUTH_JSON}.backup.$(date +%Y-%m-%d-%H%M%S)"
+    echo "Creating backup: $BACKUP_FILE"
+    cp "$AUTH_JSON" "$BACKUP_FILE"
+fi
+
+if [ -f "$AUTH_JSON" ]; then
+    TMP_FILE=$(mktemp)
+    jq --arg token "$GITHUB_TOKEN" '.["github-oauth"]["github.com"] = $token' "$AUTH_JSON" > "$TMP_FILE"
+    mv "$TMP_FILE" "$AUTH_JSON"
+else
+    echo '{"github-oauth":{"github.com":""}}' | jq --arg token "$GITHUB_TOKEN" '.["github-oauth"]["github.com"] = $token' > "$AUTH_JSON"
+fi
+
+chmod 600 "$AUTH_JSON"
+
+echo "Success! Updated $AUTH_JSON with GitHub token from gh CLI."
