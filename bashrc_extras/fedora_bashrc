@@ -1,0 +1,2 @@
+# Stops Fedora from recommending to install packages when a command fails via PackageKit-command-not-found 
+unset -f command_not_found_handle
