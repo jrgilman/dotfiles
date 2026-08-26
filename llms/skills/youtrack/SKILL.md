@@ -1,28 +1,30 @@
 ---
 name: youtrack
-description: Work with YouTrack beyond what the MCP server covers — Agile Boards and sprint membership, large comments, file attachments, and raw REST calls. Use alongside the YouTrack MCP tools, which remain the default for creating, updating, searching, reading and linking issues.
+description: Read one YouTrack issue or use features that the MCP tools do not cover. Use MCP for issue search, creation, updates, and links.
 ---
 
 # YouTrack
 
 Two tools, one instance. Pick by the job.
 
-**Use the YouTrack MCP tools for** projects, issue field schemas, creating and updating issues, searching, reading, and linking. They are typed, they validate, and they are the default.
+**Use the YouTrack MCP tools for** projects, issue field schemas, issue search, creation, updates, and links. They are the default for these operations.
 
-**Use `scripts/youtrack.sh` for** the things MCP does not do or does badly:
+**Use `scripts/youtrack.sh` to read one issue.** Also use it for work that MCP does not support:
 
-| Job | Why not MCP |
+| Job | Why use the helper |
 |---|---|
+| Read one issue | The helper gives stable text and JSON output |
 | Agile Boards, sprint membership | No MCP tool exposes them |
 | Comments over a few kilobytes | `add_issue_comment` times out and can post nothing |
 | File attachments | No MCP endpoint exists at all |
 | Any other REST endpoint | Commands API, batch operations, deletes |
 
-Do not rebuild issue creation, search or linking in the script. Two ways to do one thing is how they drift apart.
+Do not add issue search, creation, update, or link commands to the script. MCP remains the default for these operations.
 
 ## Commands
 
 ```text
+youtrack.sh issues get ISSUE_ID [--json]
 youtrack.sh boards [--project KEY] [--name TEXT] [--json]
 youtrack.sh sprints --board NAME_OR_ID [--name TEXT] [--include-archived] [--json]
 youtrack.sh add --board NAME_OR_ID --sprint NAME_OR_ID [--dry-run] ISSUE_ID...
@@ -34,6 +36,20 @@ youtrack.sh api METHOD PATH [--data-file PATH | --data-stdin | --data JSON]
 Names first match case-insensitively and exactly, then by substring. IDs such as `147-6` and `148-62` match directly. The script stops on a missing or ambiguous board or sprint name, and refuses issues whose project is not attached to the board.
 
 ## Typical use
+
+Read one issue as short text:
+
+```bash
+scripts/youtrack.sh issues get ARTC-1234
+```
+
+The first line contains the ID, State, Type, Priority, and summary. The description follows one blank line when it is not empty.
+
+Use JSON for the complete projected issue response:
+
+```bash
+scripts/youtrack.sh issues get ARTC-1234 --json
+```
 
 Find the board and sprint, create the issue through MCP, then add it:
 
@@ -61,7 +77,7 @@ scripts/youtrack.sh attach ARTC-1234 --file docs/plans/design.md
 Reach an endpoint with no wrapper:
 
 ```bash
-scripts/youtrack.sh api GET '/api/issues/ARTC-1234?fields=id,summary,description'
+scripts/youtrack.sh api GET '/api/users/me?fields=id,login,fullName'
 scripts/youtrack.sh api POST /api/issues/ARTC-1234 --data '{"description":"new text"}'
 scripts/youtrack.sh api DELETE /api/issues/ARTC-1234/comments/4-979
 ```
