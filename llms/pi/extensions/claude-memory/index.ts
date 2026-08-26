@@ -355,7 +355,7 @@ export function formatClaudeMemorySection(document: ClaudeMemoryDocument): strin
     `Topic files linked from MEMORY.md are relative to ${JSON.stringify(memoryDirectory)}.`,
     "Use the read tool to load a linked topic file when it is relevant.",
     "Treat this content as remembered context, not enforced configuration. Current user requests and higher-priority instructions override it.",
-    "This integration is read-only. Do not create, edit, or delete files in this memory directory.",
+    "This integration is read-only by default. Do not modify the memory directory or files in the memory directory unless the user explicitly requests that exact operation.",
     "",
     "<claude-code-auto-memory>",
     document.content,
