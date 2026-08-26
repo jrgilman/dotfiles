@@ -1,0 +1,3 @@
+[submodule "llms/pi/pi-patty-bg-tasks"]
+	path = llms/pi/pi-patty-bg-tasks
+	url = https://github.com/jrgilman/pi-patty-bg-tasks.git
