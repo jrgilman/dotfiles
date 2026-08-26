@@ -5,12 +5,15 @@ set +x
 
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly ISSUE_FIELDS='id,idReadable,summary,description,created,updated,resolved,reporter(id,login,fullName),project(id,name,shortName),tags(id,name),customFields(id,name,%24type,value(id,name,login,fullName,text,minutes,presentation))'
+readonly COMMENT_FIELDS='id,text,created,updated,deleted,author(id,login,fullName)'
+readonly COMMENT_PAGE_SIZE=100
 
 usage() {
     cat <<'USAGE'
 Usage:
   Issue read operations:
     youtrack.sh issues get ISSUE_ID [--json]
+    youtrack.sh issues comments list ISSUE_ID [--json]
 
   Agile board operations, which the MCP server does not expose:
     youtrack.sh boards [--project KEY] [--name TEXT] [--json]
@@ -23,7 +26,7 @@ Usage:
     youtrack.sh api METHOD PATH [--data-file PATH | --data-stdin | --data JSON]
 
 Use the MCP tools to create, update, search, and link issues.
-Use this script to read one issue and manage boards and sprints.
+Use this script to read one issue or its comments and manage boards and sprints.
 Also use it for large payloads, attachments, and endpoints that MCP does not support.
 
 With --file and --stdin the payload is streamed from disk to curl. It never
@@ -37,6 +40,8 @@ rather than an argument, so it does not appear in the process list.
 Examples:
   youtrack.sh issues get ARTC-1234
   youtrack.sh issues get --json ARTC-1234
+  youtrack.sh issues comments list ARTC-1234
+  youtrack.sh issues comments list --json ARTC-1234
   youtrack.sh comment ARTC-1234 --file notes.md
   git log --oneline -20 | youtrack.sh comment ARTC-1234 --stdin
   youtrack.sh attach ARTC-1234 --file docs/plans/design.md
@@ -194,6 +199,164 @@ get_issue() {
     fi
 }
 
+strict_json_document() {
+    local response_file="$1"
+    python3 - "$response_file" <<'PYTHON'
+import json
+import sys
+
+
+def reject_nonstandard_constant(value):
+    raise ValueError(f"nonstandard JSON constant: {value}")
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as response:
+        json.load(response, parse_constant=reject_nonstandard_constant)
+except (OSError, UnicodeError, ValueError):
+    raise SystemExit(1)
+PYTHON
+}
+
+request_comment_page() {
+    local path="$1"
+    local response_file
+    local cleanup_command
+    prepare_auth_config
+    response_file="$(mktemp)" || return 2
+    printf -v cleanup_command 'rm -f -- %q %q' "$auth_config_file" "$response_file"
+    trap "$cleanup_command" EXIT
+    chmod 600 "$response_file" || {
+        rm -f "$response_file"
+        return 2
+    }
+    if ! api_request GET "$path" >"$response_file"; then
+        rm -f "$response_file"
+        return 2
+    fi
+    if ! strict_json_document "$response_file"; then
+        rm -f "$response_file"
+        return 3
+    fi
+    if ! cat "$response_file"; then
+        rm -f "$response_file"
+        return 2
+    fi
+    rm -f "$response_file"
+}
+
+validate_comment_page() {
+    local page="$1"
+    jq -e -s 'length == 1' <<<"$page" >/dev/null 2>&1 \
+        || fail "comment page is not valid JSON"
+    jq -e 'type == "array"' <<<"$page" >/dev/null \
+        || fail "comment page must be an array"
+    jq -e '
+        all(.[];
+            if type != "object" then false
+            else
+                (has("id") and ((.id | type) == "string"))
+                and (has("text") and (.text == null or ((.text | type) == "string")))
+                and (has("created") and ((.created | type) == "number"))
+                and (has("updated") and (.updated == null or ((.updated | type) == "number")))
+                and (has("deleted") and ((.deleted | type) == "boolean"))
+                and (has("author") and (
+                    if .author == null then true
+                    elif (.author | type) == "object" then
+                        (.author | has("id")) and ((.author.id | type) == "string")
+                        and (.author | has("login")) and ((.author.login | type) == "string")
+                        and (.author | has("fullName")) and ((.author.fullName | type) == "string")
+                    else false
+                    end
+                ))
+            end
+        )
+    ' <<<"$page" >/dev/null 2>&1 || fail "comment page has malformed projected fields"
+}
+
+list_issue_comments() {
+    local issue_id=''
+    local has_issue_id=false
+    local output_json=false
+    while (($#)); do
+        case "$1" in
+            --json)
+                [[ "$output_json" == false ]] || fail "issues comments list accepts --json once"
+                output_json=true
+                shift
+                ;;
+            -*) fail "unknown issues comments list option: $1" ;;
+            *)
+                [[ "$has_issue_id" == false ]] || fail "issues comments list accepts one issue ID"
+                issue_id="$1"
+                has_issue_id=true
+                shift
+                ;;
+        esac
+    done
+    [[ "$issue_id" =~ [^[:space:]] ]] || fail "issues comments list needs one issue ID"
+    require_command python3
+
+    local encoded_issue_id
+    local offset=0
+    local page
+    local page_count
+    local page_status
+    local comments='[]'
+    encoded_issue_id="$(jq -rn --arg issue_id "$issue_id" '$issue_id | @uri')"
+    while :; do
+        page_status=0
+        page="$(request_comment_page "/api/issues/${encoded_issue_id}/comments?fields=${COMMENT_FIELDS}&%24top=${COMMENT_PAGE_SIZE}&%24skip=${offset}")" \
+            || page_status=$?
+        case "$page_status" in
+            0) ;;
+            3) fail "comment page is not valid JSON" ;;
+            *) fail "comment request failed" ;;
+        esac
+        validate_comment_page "$page"
+        page_count="$(jq 'length' <<<"$page")"
+        if ((page_count == 0)); then
+            break
+        fi
+        comments="$(printf '%s\n%s\n' "$comments" "$page" | jq -s '.[0] + .[1]')"
+        offset=$((offset + page_count))
+    done
+
+    if [[ "$output_json" == true ]]; then
+        jq -M . <<<"$comments"
+        return
+    fi
+    jq -j '
+        . as $comments
+        | to_entries[]
+        | .key as $index
+        | .value as $comment
+        | (([
+                $comment.id,
+                ($comment.author.login // ""),
+                ($comment.author.fullName // ""),
+                $comment.created,
+                ($comment.updated // ""),
+                $comment.deleted
+            ] | @tsv)
+            + "\n\n"
+            + ($comment.text // "")
+            + (if ($index + 1) < ($comments | length) then "\n\n" else "" end))
+    ' <<<"$comments"
+}
+
+dispatch_issue_comments() {
+    (($# > 0)) || fail "issues comments needs an operation, for example list"
+    [[ -n "$1" ]] || fail "issues comments needs an operation, for example list"
+    local operation="$1"
+    shift
+
+    case "$operation" in
+        list) list_issue_comments "$@" ;;
+        *) fail "unknown issues comments operation: $operation" ;;
+    esac
+}
+
 dispatch_issues() {
     (($# > 0)) || fail "issues needs an operation, for example get"
     [[ -n "$1" ]] || fail "issues needs an operation, for example get"
@@ -202,6 +365,7 @@ dispatch_issues() {
 
     case "$operation" in
         get) get_issue "$@" ;;
+        comments) dispatch_issue_comments "$@" ;;
         *) fail "unknown issues operation: $operation" ;;
     esac
 }
