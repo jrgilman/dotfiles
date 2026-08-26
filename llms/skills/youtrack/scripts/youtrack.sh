@@ -4,10 +4,14 @@ set -euo pipefail
 set +x
 
 readonly SCRIPT_NAME="$(basename "$0")"
+readonly ISSUE_FIELDS='id,idReadable,summary,description,created,updated,resolved,reporter(id,login,fullName),project(id,name,shortName),tags(id,name),customFields(id,name,%24type,value(id,name,login,fullName,text,minutes,presentation))'
 
 usage() {
     cat <<'USAGE'
 Usage:
+  Issue read operations:
+    youtrack.sh issues get ISSUE_ID [--json]
+
   Agile board operations, which the MCP server does not expose:
     youtrack.sh boards [--project KEY] [--name TEXT] [--json]
     youtrack.sh sprints --board NAME_OR_ID [--name TEXT] [--include-archived] [--json]
@@ -18,9 +22,9 @@ Usage:
     youtrack.sh attach ISSUE_ID --file PATH
     youtrack.sh api METHOD PATH [--data-file PATH | --data-stdin | --data JSON]
 
-Use the MCP tools for creating, updating, searching, reading and linking issues.
-Use this script for board and sprint work, for large payloads, for attachments,
-and for endpoints the MCP tools do not cover.
+Use the MCP tools to create, update, search, and link issues.
+Use this script to read one issue and manage boards and sprints.
+Also use it for large payloads, attachments, and endpoints that MCP does not support.
 
 With --file and --stdin the payload is streamed from disk to curl. It never
 becomes a command argument.
@@ -31,10 +35,12 @@ errors if either is empty. The token is written to a private curl config file
 rather than an argument, so it does not appear in the process list.
 
 Examples:
+  youtrack.sh issues get ARTC-1234
+  youtrack.sh issues get --json ARTC-1234
   youtrack.sh comment ARTC-1234 --file notes.md
   git log --oneline -20 | youtrack.sh comment ARTC-1234 --stdin
   youtrack.sh attach ARTC-1234 --file docs/plans/design.md
-  youtrack.sh api GET /api/issues/ARTC-1234?fields=id,summary,description
+  youtrack.sh api GET /api/users/me?fields=id,login,fullName
 USAGE
 }
 
@@ -93,6 +99,111 @@ api_request() {
     fi
 
     curl "${curl_args[@]}" "${base_url}${path}"
+}
+
+get_issue() {
+    local issue_id=''
+    local has_issue_id=false
+    local output_json=false
+    while (($#)); do
+        case "$1" in
+            --json)
+                [[ "$output_json" == false ]] || fail "issues get accepts --json once"
+                output_json=true
+                shift
+                ;;
+            -*) fail "unknown issues get option: $1" ;;
+            *)
+                [[ "$has_issue_id" == false ]] || fail "issues get accepts one issue ID"
+                issue_id="$1"
+                has_issue_id=true
+                shift
+                ;;
+        esac
+    done
+    [[ "$issue_id" =~ [^[:space:]] ]] || fail "issues get needs one issue ID"
+    local encoded_issue_id
+    local response
+    encoded_issue_id="$(jq -rn --arg issue_id "$issue_id" '$issue_id | @uri')"
+    response="$(api_request GET "/api/issues/${encoded_issue_id}?fields=${ISSUE_FIELDS}")"
+    jq -e -s 'length == 1' <<<"$response" >/dev/null 2>&1 || fail "issue response is not valid JSON"
+    jq -e 'type == "object"' <<<"$response" >/dev/null || fail "issue response must be an object"
+    jq -e '(.idReadable | type == "string") and (.summary | type == "string")' <<<"$response" >/dev/null \
+        || fail "issue response needs string idReadable and summary fields"
+    jq -e '((has("description") | not) or .description == null or ((.description | type) == "string"))' \
+        <<<"$response" >/dev/null || fail "the description in the issue response must be a string or null"
+    jq -e '((has("customFields") | not) or .customFields == null or ((.customFields | type) == "array"))' \
+        <<<"$response" >/dev/null || fail "the customFields value in the issue response must be an array or null"
+    jq -e 'if .customFields == null then true else (.customFields | map(type == "object") | all) end' \
+        <<<"$response" >/dev/null || fail "each customFields entry in the issue response must be an object"
+    jq -e '
+        def field_has_type_when_present($name; $expected_type):
+            (has($name) | not) or ((.[$name] | type) == $expected_type);
+        def fields_are_strings_when_present($names):
+            . as $object
+            | all($names[]; . as $name
+                | ($object | has($name) | not) or (($object[$name] | type) == "string"));
+        field_has_type_when_present("id"; "string")
+        and field_has_type_when_present("created"; "number")
+        and field_has_type_when_present("updated"; "number")
+        and ((has("resolved") | not) or .resolved == null or ((.resolved | type) == "number"))
+        and (
+            (has("reporter") | not)
+            or .reporter == null
+            or (if (.reporter | type) == "object"
+                then (.reporter | fields_are_strings_when_present(["id", "login", "fullName"]))
+                else false end)
+        )
+        and (
+            (has("project") | not)
+            or (if (.project | type) == "object"
+                then (.project | fields_are_strings_when_present(["id", "name", "shortName"]))
+                else false end)
+        )
+        and (
+            (has("tags") | not)
+            or (if (.tags | type) == "array"
+                then all(.tags[];
+                    if type == "object"
+                    then ((.id | type) == "string") and ((.name | type) == "string")
+                    else false end)
+                else false end)
+        )
+        and (if .customFields == null then true else all(.customFields[];
+            ((.name | type) == "string")
+            and fields_are_strings_when_present(["id", "$type"])
+            and (if .name == "State" or .name == "Type" or .name == "Priority"
+                then .value == null or (if (.value | type) == "object"
+                    then ((.value.name | type) == "string")
+                    else false end)
+                else true end)
+        ) end)
+    ' <<<"$response" >/dev/null || fail "issue response has malformed projected fields"
+    if [[ "$output_json" == true ]]; then
+        jq . <<<"$response"
+        return
+    fi
+    jq -r '
+        def field($name):
+            ([.customFields[]? | select(.name == $name) | .value.name?][0] // "");
+        [.idReadable, field("State"), field("Type"), field("Priority"), .summary] | @tsv
+    ' <<<"$response"
+    if jq -e '(.description | type) == "string" and .description != ""' <<<"$response" >/dev/null; then
+        printf '\n'
+        jq -j '.description' <<<"$response"
+    fi
+}
+
+dispatch_issues() {
+    (($# > 0)) || fail "issues needs an operation, for example get"
+    [[ -n "$1" ]] || fail "issues needs an operation, for example get"
+    local operation="$1"
+    shift
+
+    case "$operation" in
+        get) get_issue "$@" ;;
+        *) fail "unknown issues operation: $operation" ;;
+    esac
 }
 
 # Sends a body read straight from a file, so a large payload never becomes an
@@ -476,6 +587,7 @@ shift
 configure_api
 
 case "$command_name" in
+    issues) dispatch_issues "$@" ;;
     boards) print_boards "$@" ;;
     sprints) print_sprints "$@" ;;
     add) add_issues "$@" ;;
