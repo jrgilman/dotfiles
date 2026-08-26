@@ -1,6 +1,6 @@
 ---
 name: youtrack
-description: Read one YouTrack issue or use features that the MCP tools do not cover. Use MCP for issue search, creation, updates, and links.
+description: Read one YouTrack issue or list its comments, or use features that the MCP tools do not cover. Use MCP for issue search, creation, updates, and links.
 ---
 
 # YouTrack
@@ -9,11 +9,12 @@ Two tools, one instance. Pick by the job.
 
 **Use the YouTrack MCP tools for** projects, issue field schemas, issue search, creation, updates, and links. They are the default for these operations.
 
-**Use `scripts/youtrack.sh` to read one issue.** Also use it for work that MCP does not support:
+**Use `scripts/youtrack.sh` to read one issue or list all of its comments.** Also use it for work that MCP does not support:
 
 | Job | Why use the helper |
 |---|---|
 | Read one issue | The helper gives stable text and JSON output |
+| List an issue's comments | The helper validates and fetches every page before printing |
 | Agile Boards, sprint membership | No MCP tool exposes them |
 | Comments over a few kilobytes | `add_issue_comment` times out and can post nothing |
 | File attachments | No MCP endpoint exists at all |
@@ -25,6 +26,7 @@ Do not add issue search, creation, update, or link commands to the script. MCP r
 
 ```text
 youtrack.sh issues get ISSUE_ID [--json]
+youtrack.sh issues comments list ISSUE_ID [--json]
 youtrack.sh boards [--project KEY] [--name TEXT] [--json]
 youtrack.sh sprints --board NAME_OR_ID [--name TEXT] [--include-archived] [--json]
 youtrack.sh add --board NAME_OR_ID --sprint NAME_OR_ID [--dry-run] ISSUE_ID...
@@ -50,6 +52,15 @@ Use JSON for the complete projected issue response:
 ```bash
 scripts/youtrack.sh issues get ARTC-1234 --json
 ```
+
+List every accessible comment in API order:
+
+```bash
+scripts/youtrack.sh issues comments list ARTC-1234
+scripts/youtrack.sh issues comments list ARTC-1234 --json
+```
+
+Text mode prints each comment's ID, author, timestamps, and deletion state followed by its unchanged text. JSON mode returns one array containing every projected comment. The command fetches through the final empty page and prints nothing if any request or page is invalid.
 
 Find the board and sprint, create the issue through MCP, then add it:
 
@@ -93,6 +104,7 @@ Comment when the content is discussion, or when it should be readable inline wit
 ## Authentication and safety
 
 - The script reads `YOUTRACK_BASE_URL` (the instance origin) and `YOUTRACK_AUTHORIZATION` (the full header value, for example `Bearer <token>`) from the environment, and errors if either is empty.
+- `issues comments list` requires Python 3 to validate strict JSON syntax before `jq` checks the projected response fields.
 - Run `scripts/setup.sh` once. It creates `~/.config/llm-skills/youtrack-agile.env` and sources it from your shell profile. Then edit that file and replace the token placeholder. Re-running is safe.
 - **The token never becomes a command argument.** The script writes the Authorization header into a private curl config file with 600 permissions and removes it on exit, so the token does not appear in the process list.
 - Keep the token out of this skill and out of any repository. Never read or print that env file, never enable shell tracing, never use verbose curl output.

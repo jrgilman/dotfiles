@@ -5,26 +5,42 @@ set -euo pipefail
 : "${YOUTRACK_TEST_CURL_CALLS:?}"
 readonly authorization_value="${YOUTRACK_AUTHORIZATION:-}"
 readonly authorization_secret="${authorization_value##* }"
+touch "$YOUTRACK_TEST_CURL_CALLS"
+readonly call_index="$(($(wc -l <"$YOUTRACK_TEST_CURL_CALLS") + 1))"
+readonly call_arguments_file="${YOUTRACK_TEST_CURL_ARGUMENTS}.${call_index}"
 authorization_argument_leaked=false
 lowercase_argument=''
+: >"$call_arguments_file"
 printf 'call\n' >>"$YOUTRACK_TEST_CURL_CALLS"
-{
-    for argument in "$@"; do
-        lowercase_argument="${argument,,}"
-        if [[
-            ( -n "$authorization_value" && "$argument" == *"$authorization_value"* ) ||
-            ( -n "$authorization_secret" && "$argument" == *"$authorization_secret"* ) ||
-            "$lowercase_argument" == *authorization:*
-        ]]; then
-            printf '%s\n' '[AUTHORIZATION ARGUMENT LEAK]'
-            authorization_argument_leaked=true
-            continue
-        fi
-        printf '%s\n' "$argument"
-    done
-} >>"$YOUTRACK_TEST_CURL_ARGUMENTS"
+for argument in "$@"; do
+    lowercase_argument="${argument,,}"
+    if [[
+        ( -n "$authorization_value" && "$argument" == *"$authorization_value"* ) ||
+        ( -n "$authorization_secret" && "$argument" == *"$authorization_secret"* ) ||
+        "$lowercase_argument" == *authorization:*
+    ]]; then
+        argument='[AUTHORIZATION ARGUMENT LEAK]'
+        authorization_argument_leaked=true
+    fi
+    printf '%s\n' "$argument" >>"$YOUTRACK_TEST_CURL_ARGUMENTS"
+    printf '%s\n' "$argument" >>"$call_arguments_file"
+done
 if [[ "$authorization_argument_leaked" == true ]]; then
     exit 1
+fi
+if [[ -n "${YOUTRACK_TEST_CURL_RESPONSES_DIRECTORY:-}" ]]; then
+    readonly indexed_response_file="${YOUTRACK_TEST_CURL_RESPONSES_DIRECTORY}/${call_index}.response"
+    readonly indexed_status_file="${YOUTRACK_TEST_CURL_RESPONSES_DIRECTORY}/${call_index}.status"
+    [[ -f "$indexed_response_file" ]] || {
+        printf 'fake curl: no response configured for call %s\n' "$call_index" >&2
+        exit 97
+    }
+    cat "$indexed_response_file"
+    if [[ -f "$indexed_status_file" ]]; then
+        read -r indexed_status <"$indexed_status_file"
+        exit "$indexed_status"
+    fi
+    exit 0
 fi
 if [[ -n "${YOUTRACK_TEST_CURL_RESPONSE_FILE:-}" ]]; then
     cat "$YOUTRACK_TEST_CURL_RESPONSE_FILE"
