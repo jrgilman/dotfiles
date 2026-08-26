@@ -1,0 +1,9 @@
+interface:
+  display_name: "YouTrack Agile Board"
+  short_description: "Manage YouTrack boards and sprint membership"
+  default_prompt: "Use $youtrack to work with YouTrack beyond the MCP server: Agile Boards and sprints, large comments, attachments, and raw REST calls."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "youtrack"
+      description: "YouTrack MCP server for issue operations"
